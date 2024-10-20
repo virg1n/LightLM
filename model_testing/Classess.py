@@ -20,20 +20,20 @@ batch_size = 2**19
 mini_batches = 8
 time_stamps = 512
 context_len = 1024
-emb_neur = 768
+emb_neur = 768 #1024
 epochs = 19073
-num_blocks = 12
-num_heads = 12
-# dropout_neur = 0.2
+num_blocks = 12 #16
+num_heads = 12 #16
+dropout_neur = 0.2
 data_dir = "edu_fineweb10B"
 log_dir = "log"
-checkpoints_frequency = 2000
+checkpoints_frequency = 5000
 log_file = os.path.join(log_dir, f"log.txt")
 val_log_file = os.path.join(log_dir, f"val_log.txt")
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
-warmup_lr_steps = 700
+warmup_lr_steps = 500
 weight_decay = 0.1
 beta1, beta2 = 0.9, 0.95
 
