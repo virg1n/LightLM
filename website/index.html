@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Input</title>
+    <link rel="stylesheet" href="styles.css"> <!-- Link to external CSS -->
+</head>
+<body>
+    <div class="form__group field" style="margin-top: -3em;">
+        <div>
+            <h1 style="line-height: 80%; color: white;">Start Your Sentence,</h1>
+            <h3 style="margin-top: -1em;background-color: #c1d9c1;color: #2a7f2a;padding: 2px 4px;border-radius: 3px;">AI will complete it</h3>
+        </div>
+    </div>
+
+    <div class="form__group field">
+        <div class="form__field" id="message" contenteditable="true" placeholder="Your message"></div>
+        <label for="message" class="form__label">Start of your sentence</label>
+        <button class="button" id="sendButton">Complete sentence</button>
+        <button class="button" id="clearButton" disabled>Clear</button>
+    </div>
+
+    <div class="form__group">
+        <label for="rangeInput" class="form__label">Maximum length of completion</label>
+        <div class="input-container">
+            <input type="range" id="rangeInput" class="form__field range" min="5" max="100" value="20" />
+            <input type="number" id="numberInput" class="form__field number" min="5" max="100" value="20" style="margin-top: -20px;"/>
+        </div>
+    </div>
+
+    <div class="form__group" style="margin-top: 2em;">
+        <p style="font-size: 70%; color: #666;">
+            This website demonstrates a small Language Model with 124 million parameters, inspired by the 
+            <a href="https://arxiv.org/abs/1706.03762" target="_blank">"Attention Is All You Need"</a> paper and the 
+            <a href="https://arxiv.org/abs/2005.14165" target="_blank">"GPT-3 124M"</a> architecture. 
+            <br>
+            This model achieves the same HellaSwag test accuracy as GPT-3 124M, using a dataset 30 times smaller.
+            <br>
+            You can find the model's code and architecture in the following GitHub repository:
+        </p>
+        
+        <a href="https://github.com/virg1n/TryingLLM" target="_blank" class="github-button">
+            <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub Logo" class="github-logo">
+            View on GitHub
+        </a>
+    </div>
+
+    <script src="scripts.js"></script> 
+</body>
+</html>

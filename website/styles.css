@@ -1,0 +1,250 @@
+:root {
+    --primary: #11998e;
+    --secondary: #38ef7d;
+    --white: #fff;
+    --gray: #9b9b9b;
+}
+
+.form__group {
+    position: relative;
+    padding: 15px 0;
+    margin-top: 20px;
+    width: 100%;
+    max-width: 600px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.form__label {
+    font-size: 1rem;
+    color: var(--gray);
+    margin-bottom: 10px;
+}
+
+.input-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.form__field {
+    font-family: inherit;
+    border: 0;
+    background: transparent;
+    outline: 0;
+    font-size: 1.3rem;
+    color: var(--white);
+    padding: 7px 0;
+    transition: border-color 0.2s;
+}
+
+.range {
+    -webkit-appearance: none;
+    width: 70%;
+    height: 6px;
+    background: #ccc;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--gray);
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.range:hover::-webkit-slider-thumb {
+    background: var(--primary);
+}
+
+.range:active::-webkit-slider-thumb {
+    background: var(--secondary);
+}
+
+.number {
+    width: 80px;
+    text-align: right;
+    border-bottom: 2px solid var(--gray);
+}
+
+.number:focus {
+    border-color: var(--primary);
+}
+
+body {
+    font-family: 'Poppins', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background-color: #222222;
+    padding: 20px;
+}
+
+.highlighted-text {
+    background-color: #c1d9c1; /* Light green background for the highlighted text */
+    color: #2a7f2a; /* Darker green text */
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+.button {
+    font-family: inherit;
+    font-size: 1.3rem;
+    color: var(--white);
+    background-color: transparent;
+    border: 2px solid var(--gray);
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: border-color 0.3s, background-color 0.3s, color 0.3s;
+    display: inline-block;
+    margin-top: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.button:hover {
+    border-color: var(--primary);
+    background-color: var(--primary);
+    color: var(--white);
+}
+
+.button:active {
+    background-color: var(--secondary);
+    border-color: var(--secondary);
+}
+
+.button:disabled {
+    background-color: var(--gray);
+    color: #666;
+    border-color: var(--gray);
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.github-button {
+    font-family: 'Poppins', sans-serif;
+    font-size: 1rem;
+    color: var(--white);
+    background-color: var(--primary);
+    border: 2px solid var(--primary);
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s, border-color 0.3s;
+    text-decoration: none;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.github-button:hover {
+    background-color: var(--secondary);
+    border-color: var(--secondary);
+}
+
+.github-logo {
+    width: 24px;
+    height: 24px;
+}
+
+
+
+
+.form__group {
+    position: relative;
+    padding: 15px 0 0;
+    margin-top: 10px;
+    width: 100%; 
+    max-width: 600px;
+}
+
+.form__field {
+    font-family: inherit;
+    width: 100%;
+    border: 0;
+    border-bottom: 2px solid var(--gray);
+    outline: 0;
+    font-size: 1.3rem;
+    color: var(--white);
+    padding: 7px 0;
+    background: transparent;
+    transition: border-color 0.2s;
+    resize: vertical; 
+}
+
+.form__field::placeholder {
+    color: transparent;
+}
+
+.form__field:placeholder-shown ~ .form__label {
+    font-size: 1.3rem;
+    cursor: text;
+    top: 20px;
+}
+
+.form__label {
+    position: absolute;
+    top: 0;
+    display: block;
+    transition: 0.2s;
+    font-size: 1rem;
+    color: var(--gray);
+}
+
+.form__field:focus {
+    padding-bottom: 6px;
+    font-weight: 700;
+    border-width: 3px;
+    border-image: linear-gradient(to right, var(--primary), var(--secondary));
+    border-image-slice: 1;
+}
+
+.form__field:focus ~ .form__label {
+    position: absolute;
+    top: 0;
+    display: block;
+    transition: 0.2s;
+    font-size: 1rem;
+    color: var(--primary);
+    font-weight: 700;
+}
+
+
+.form__field:required,
+.form__field:invalid {
+    box-shadow: none;
+}
+
+
+body {
+    font-family: 'Poppins', sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-size: 1.5rem;
+    background-color: #222222;
+    padding: 20px;
+}
+
+
+@media (max-width: 600px) {
+    .form__group {
+        width: 100%;
+    }
+}
+
+
