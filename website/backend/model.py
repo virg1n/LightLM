@@ -8,7 +8,7 @@ import time
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-checkpoint_path = './model_fourepochs_76291_125M.pt'
+checkpoint_path = '../../model_fourepochs_76291_125M.pt'
 model_from_checkpoint = GPT()
 
 # Load checkpoint
