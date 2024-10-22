@@ -1,33 +1,67 @@
-# Tiny LLM
+# Tiny LLM - 124M Parameter Language Model
 
-## Introduction
+**Tiny LLM (124M)** is a small-scale language model inspired by GPT-2 and GPT-3 architectures. 
 
-**Tiny LLM** is a small language model built from scratch using PyTorch. This project was created for educational purposes, inspired by GPT-2 and GPT-3 architectures.
+### Model Architecture
+- **12 transformer layers** with **12 attention heads**
+- **~124 million parameters**
+- **bfloat16 precision** for faster training
+- **Distributed Data Parallel (DDP)** for efficient multi-GPU training
 
-The model consists of:
-- **12 layers** with **12 attention heads**
-- **~125 million parameters**
+### Dataset
 
-### Model Performance
+The model was trained on the **fineweb-edu** dataset, comprising **10 billion tokens** (~30x smaller than GPT-3's training data). The training data was preprocessed and tokenized in a format similar to GPT-style models.
 
-Tiny LLM is capable of generating coherent text based on previously inputted tokens. The model was trained on the **fineweb-edu** dataset, comprising 10 billion tokens (approximately 20 GB in size). After training for a single epoch, it achieved the following results:
+### Performance
+Tiny LLM achieved competitive results using a much smaller dataset and fewer resources:
 
-- **Validation Loss**: `2.952`  
-  *GPT-2 baseline*: `3.292`
-- **HellaSwag Test Accuracy**: `0.299`  
-  *GPT-2 baseline*: `0.294`
+- **Validation Loss**: `2.85`
+- **HellaSwag Test Accuracy**: `33%`  
+  *(Comparable to GPT-3's performance on a similar 124M model)*
 
-The model file size is approximately 1.5 GB.
+The model is trained for **100k steps**, and we have visualizations of training and validation loss over time, which you can find below (images included).
 
-## Acknowledgments
+---
 
-This project was made possible with inspiration and resources from the following sources:
+### Model Demo
+
+The model is deployed and accessible at the following link:  
+**[Tiny LLM Demo](https://lm.vviky.com)**
+
+Here is an example of the output when prompted with: "Hello, I am a language model,":
+
+Hello, I am a language model, inspired by the delightful Chinese philosophers, Bo ibidatus, and of course
+Hello, I am a language model, a boolean module, and have a vision of manipulating data in C
+Hello, I am a language model, and this topic is important for Blockchain. This means that it will be important
+Hello, I am a language model, programmer, and consultant who works at the Unity language team at OMG (Internet
+Hello, I am a language model, university teacher, teacher and administrator. In addition to teaching, I write articles
+
+
+---
+
+### Training and Loss Progress
+
+Over the course of ~100k steps, the model's training loss and validation loss showed the following trends :
+
+---
+
+### Key Features
+
+- **Tiny Dataset**: Trained on a dataset that is 30 times smaller than GPT-3's (only **10 billion tokens**).
+- **DDP Implementation**: Distributed Data Parallelism ensures efficient multi-GPU training, making it easier to scale the training process across hardware.
+- **bfloat16 Precision**: Enabled faster training with reduced memory consumption.
+
+### Acknowledgments
+
+This project was made possible with the inspiration and knowledge provided by the following sources:
 
 - **[GPT-3 Research Paper (OpenAI)](https://arxiv.org/abs/2005.14165)**  
-  Comprehensive paper on GPT-3's architecture, methodology, and benchmarks.
+Comprehensive paper detailing GPT-3's architecture, training methodology, and benchmark performance.
 
 - **[NanoGPT by Andrej Karpathy](https://github.com/karpathy/nanoGPT)**  
-  A minimal implementation of GPT, along with insightful [YouTube tutorials](https://www.youtube.com/watch?v=kCc8FmEb1nY).
+A minimal implementation of GPT that served as a practical guide for this project.
 
 - **[fineweb-edu Dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)**  
   The dataset used for training Tiny LLM, hosted on Hugging Face.
+
+- ...
