@@ -17,6 +17,8 @@ const sendButton = document.getElementById('sendButton');
 
     // Function to send POST request with message and maxLength
     function sendRequest(message, maxLength) {
+        loader.style.display = 'block';  // Show the loader when the request starts
+        message = message.replace(/\s+$/, '');
         fetch(endpoint, {
             method: 'POST',
             headers: {
@@ -32,7 +34,10 @@ const sendButton = document.getElementById('sendButton');
             const serverResponse = data.response;
             appendToContenteditable(serverResponse);
         })
-        .catch((error) => console.error('Error:', error));
+        .catch((error) => console.error('Error:', error))
+        .finally(() => {
+            loader.style.display = 'none';  // Hide the loader when the request completes (success or error)
+        });
     }
 
     function appendToContenteditable(serverResponse) {
