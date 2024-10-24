@@ -30,26 +30,22 @@ The model is deployed and accessible at the following link:
 
 Here is an example of the output when prompted with: "Hello, I am a language model,":
 
+```
 Hello, I am a language model, inspired by the delightful Chinese philosophers, Bo ibidatus, and of course
 Hello, I am a language model, a boolean module, and have a vision of manipulating data in C
 Hello, I am a language model, and this topic is important for Blockchain. This means that it will be important
 Hello, I am a language model, programmer, and consultant who works at the Unity language team at OMG (Internet
 Hello, I am a language model, university teacher, teacher and administrator. In addition to teaching, I write articles
-
+```
 
 ---
 
 ### Training and Loss Progress
 
 Over the course of ~100k steps, the model's training loss and validation loss showed the following trends :
+[TODO] add images
 
 ---
-
-### Key Features
-
-- **Tiny Dataset**: Trained on a dataset that is 30 times smaller than GPT-3's (only **10 billion tokens**).
-- **DDP Implementation**: Distributed Data Parallelism ensures efficient multi-GPU training, making it easier to scale the training process across hardware.
-- **bfloat16 Precision**: Enabled faster training with reduced memory consumption.
 
 ### Acknowledgments
 
