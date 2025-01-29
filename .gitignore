@@ -1,2 +1,5 @@
 *.pt
 *.pyc
+/edu_fineweb1B/
+/edu_fineweb10B/
+/.ipynb_checkpoints/
