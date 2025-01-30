@@ -516,5 +516,8 @@ def main():
     model = model.to(device)
     model = torch.compile(model)
 
+    print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
+
+
 if __name__ == "__main__":
     main()

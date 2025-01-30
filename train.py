@@ -166,7 +166,7 @@ for epoch in range(epochs):
     # wrtie to the file losses
     if master_process and epoch%5==0:
         print(f"epoch: {epoch}, loss: {accumulated_loss:.5f}, tt_loss:{accumulated_tt_loss:.5f}, norm: {norm:.5f}, time: {dt*1000:.2f}ms, tok/s: {data_loader.B*data_loader.T*mini_epochs*ddp_world_size/dt:.2f}")
-        # with open(log_file, "a") as f:
-        #     f.write(f"epoch:{epoch} loss:{accumulated_loss.item():.5f} tt_loss:{accumulated_tt_loss:.5f}\n")
+        with open(log_file, "a") as f:
+            f.write(f"epoch:{epoch} loss:{accumulated_loss.item():.5f} tt_loss:{accumulated_tt_loss:.5f}\n")
 if ddp:
     destroy_process_group()
