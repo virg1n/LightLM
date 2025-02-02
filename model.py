@@ -11,118 +11,63 @@ import inspect
 import os
 from dataclasses import dataclass
 from huggingface_hub import PyTorchModelHubMixin
-
+from typing import Optional
 
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-enc = tiktoken.get_encoding("gpt2")
-SEED = 1337
-
-torch.manual_seed(SEED)
-if device == 'cuda':
-    torch.cuda.manual_seed(SEED)
-
-# assert batch_size % (mini_batches * time_stamps) == 0, "batch_size is not devided by B and T"
-# mini_epochs = int(batch_size / (mini_batches * time_stamps)) #number of mini-batches to get 0.5M batch
 
 @dataclass
 class ModelConfig:
+    device: str
     vocab_size: int
 
-    num_dims: int
-    num_heads: int                      # querry heads
-    num_kv_heads: int
-    num_layers: int
-    # ffn_hidden_dims: int                # 
+    num_dims: int                       # number of dimensions
+    num_heads: int                      # number of query heads
+    num_kv_heads: int                   # number of key/value heads
+    num_layers: int                     # total transformer layers
+    ffn_hidden_dims: int                # hidden dimension for FFN/FFNwMoE
 
-    batch_size: int
-    mini_batches: int
-    time_stamps: int
-    context_len: int
-    use_cache: bool                     # KV-cache
-    use_flash: bool                     # flash attention
+    context_len: int                    # maximum context length
+    use_cache: bool                     # enable KV-caching
+    use_flash: bool                     # use Flash Attention
+    use_moe: bool                       # enable mixture-of-experts
 
-    # moe_type: str                     # DeepSeek/default
     moe_num_experts: int                # total number of experts
-    moe_routed_experts: int             # top_k (how many experts to choose per token)
-    moe_eps: float = 1e-6
-    moe_aux_loss_coef: float = 0.01
-    moe_shared_experts: int = 0         # number of experts shared experts for DeepSeekMoE
-    use_lossfreebalance: bool = False   # AUXILIARY-LOSS-FREE LOAD BALANCING STRATEGY FOR MIXTURE-OF-EXPERTS from DeepSeek https://arxiv.org/pdf/2408.15664
+    moe_routed_experts: int             # number of experts per token (top_k)
+    moe_eps: float = 1e-6               # epsilon for router stability
+    moe_aux_loss_coef: float = 0.01     # coefficient for auxiliary loss
+    moe_shared_experts: int = 0         # number of shared experts (DeepSeekMoE)
+    use_lossfreebalance: bool = False   # use Auxiliary-loss-free load balancing strategy for mixture-of-experts from DeepSeek https://arxiv.org/pdf/2408.15664
 
     rmsnorm_eps: float = 1e-6
     rope_theta: float = 1e5
 
-    
-
-def load_tokens(filename):
-    npt = np.load(filename)
-    npt = npt.astype(np.int32)
-    ptt = torch.tensor(npt, dtype=torch.long)
-    return ptt
-
-class DataLoader():
-    def __init__(self, B, T, cur_process, num_processes, data_dir, split):
-        self.B = B
-        self.T = T
-        self.cur_process = cur_process
-        self.cur_shard = 0
-        self.num_processes = num_processes
-        self.data_dir = data_dir
-
-        shards = os.listdir(self.data_dir)
-        shards = [s for s in shards if split in s]
-        shards = sorted(shards)
-        shards = [os.path.join(self.data_dir, s) for s in shards]
-        self.shards = shards
-
-        self.tokens = load_tokens(self.shards[self.cur_shard])
-        
-        self.current_step = cur_process * B * T
-
-        print(f"loaded ~{len(self.tokens)*len(self.shards)} tokens")
+    ffn_dim_multiplier: Optional[int] = None    # optional multiplier to compute ffn_hidden_dims
 
 
-    def reset(self):
-        self.cur_shard = 0
-        self.tokens = load_tokens(self.shards[self.current_shard])
-        self.current_position = self.B * self.T * self.cur_process
-        
-    def next_batch(self):
-        B, T = self.B, self.T
-        
-        self.current_step += B * T * self.num_processes
-        tokens = self.tokens[self.current_step:self.current_step+B*T+1]
-        x = (tokens[:-1]).view(B, T)
-        y = (tokens[1:]).view(B, T)
-        if (self.current_step+B*T* self.num_processes + B*T+1)  > len(self.tokens):
-            self.cur_shard = (self.cur_shard+1) % len(self.shards)
-            self.tokens = load_tokens(self.shards[self.cur_shard])
-            self.current_step = self.cur_process * B * T
-        return x, y
-    
-# Help function for RoPE
+
+# Helper function for RoPE
 def repeat_kv(vct: torch.Tensor, n_times: int):
-    bsz, cl, num_kv_heads, dm = vct.shape
+    c_batch_size, c_context_len, num_kv_heads, c_dim = vct.shape
     if n_times == 1:
         return vct
     else:
         return (
             vct[:, :, :, None, :]
-            .expand(bsz, cl, num_kv_heads, n_times, dm)
-            .reshape(bsz, cl, num_kv_heads * n_times, dm)
+            .expand(c_batch_size, c_context_len, num_kv_heads, n_times, c_dim)
+            .reshape(c_batch_size, c_context_len, num_kv_heads * n_times, c_dim)
         )
 
 
-# This function was taked from https://github.com/hkproj/pytorch-llama/blob/main/model.py
 def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, theta: float = 10000.0):
-    assert head_dim % 2 == 0, "Dimension must be divisible by 2"
+    assert head_dim % 2 == 0, "dimensions must be divisible by 2"
+
     theta_numerator = torch.arange(0, head_dim, 2).float()
-    theta = 1.0 / (theta ** (theta_numerator / head_dim)).to(device) # (Dim / 2)
+    theta = 1.0 / (theta ** (theta_numerator / head_dim)).to(device)
     m = torch.arange(seq_len, device=device)
+
     freqs = torch.outer(m, theta).float()
     freqs_complex = torch.polar(torch.ones_like(freqs), freqs)
     return freqs_complex
@@ -131,6 +76,7 @@ def apply_rotary_pos(x: torch.Tensor, freqs_complex: torch.Tensor, device: str):
     x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
     freqs_complex = freqs_complex.unsqueeze(0).unsqueeze(2)
     x_rotated = x_complex * freqs_complex
+
     x_out = torch.view_as_real(x_rotated)
     x_out = x_out.reshape(*x.shape)
     return x_out.type_as(x).to(device)
@@ -150,7 +96,7 @@ class RMSNorm(torch.nn.Module):
     
 
 class GroupedQueryAttention(nn.Module):
-    def __init__(self, config, device=device):
+    def __init__(self, config):
         super().__init__()
 
         self.use_cache = config.use_cache
@@ -159,7 +105,6 @@ class GroupedQueryAttention(nn.Module):
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_heads if config.num_kv_heads is None else config.num_kv_heads
 
-        self.num_heads = config.num_heads
         self.num_rep = self.num_heads // self.num_kv_heads
         self.head_dim = config.num_dims // self.num_heads
 
@@ -225,59 +170,50 @@ class GroupedQueryAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
+    """
+    Default Feed Forward Layer.
+    """
     def __init__(self, config):
         super().__init__()
 
-        # Caclulating number of hidden dimensions like in Llama2
-        multiple_of=4
-        ffn_dim_multiplier=None
-        hidden_dim = 4 * config.num_dims
-        hidden_dim = int(2 * config.num_dims / 3)
+        self.hidden_dim = config.ffn_hidden_dims
 
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+        self.w1 = nn.Linear(config.num_dims, self.hidden_dim, bias=False)
+        self.w2 = nn.Linear(self.hidden_dim, config.num_dims, bias=False)
+        self.w3 = nn.Linear(config.num_dims, self.hidden_dim, bias=False)
 
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+    def forward(self, x: torch.Tensor):
+        return self.w2(F.silu(self.w1(x)) * self.w3(x)), None
 
-        self.w1 = nn.Linear(config.num_dims, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, config.num_dims, bias=False)
-        self.w3 = nn.Linear(config.num_dims, hidden_dim, bias=False)
 
-    def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
-
-class FFNwMoE(nn.Module): # MoE Layer/DeepSeek MoE Layer
-    def __init__(self, config):
+class FFNwMoE(nn.Module): 
+    """
+    Feed Forward with MoE with optional shared experts.
+    Returns after forward:
+        output: Combined outputs from experts
+        aux_loss: Auxiliary loss tensor or routing metadata
+    """
+    def __init__(self, config: ModelConfig):
         super().__init__()
-        # self.moe_type = config.moe_type.lower()
+        self.hidden_dim = config.ffn_hidden_dims
+
         self.moe_routed_experts = config.moe_routed_experts # top_k
         self.moe_aux_loss_coef = config.moe_aux_loss_coef
         self.moe_eps = config.moe_eps
         self.moe_shared_experts = config.moe_shared_experts
         self.num_experts = config.moe_num_experts
 
-        self.use_lossfreebalance = config.use_lossfreebalance
-        
-        # Caclulating number of hidden dimensions like in Llama2
-        multiple_of=4
-        ffn_dim_multiplier=None
-        hidden_dim = 4 * config.num_dims
-        hidden_dim = int(2 * config.num_dims / 3)
+        self.use_lossfreebalance = config.use_lossfreebalance 
 
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.hidden_dim = hidden_dim
 
         self.router = nn.Linear(config.num_dims, self.num_experts, bias=False)
         self.experts = nn.ModuleList()
         for _ in range(self.num_experts):
             self.experts.append(
                 nn.ModuleList([
-                    nn.Linear(config.num_dims, hidden_dim, bias=False),
-                    nn.Linear(hidden_dim, config.num_dims, bias=False),
-                    nn.Linear(config.num_dims, hidden_dim, bias=False)
+                    nn.Linear(config.num_dims, self.hidden_dim, bias=False),
+                    nn.Linear(self.hidden_dim, config.num_dims, bias=False),
+                    nn.Linear(config.num_dims, self.hidden_dim, bias=False)
                 ]))
         
         # shared experts (for DeepSeekMoE)
@@ -285,16 +221,16 @@ class FFNwMoE(nn.Module): # MoE Layer/DeepSeek MoE Layer
         for _ in range(self.moe_shared_experts):
             self.shared_experts.append(
                 nn.ModuleList([
-                    nn.Linear(config.num_dims, hidden_dim, bias=False),
-                    nn.Linear(hidden_dim, config.num_dims, bias=False),
-                    nn.Linear(config.num_dims, hidden_dim, bias=False)
+                    nn.Linear(config.num_dims, self.hidden_dim, bias=False),
+                    nn.Linear(self.hidden_dim, config.num_dims, bias=False),
+                    nn.Linear(config.num_dims, self.hidden_dim, bias=False)
                 ]))
             
-        # AUXILIARY-LOSS-FREE LOAD BALANCING STRATEGY FOR MIXTURE-OF-EXPERTS from DeepSeek https://arxiv.org/pdf/2408.15664
+        # Auxiliary-loss-free load balancing strategy for mixture-of-experts from DeepSeek https://arxiv.org/pdf/2408.15664
         if self.use_lossfreebalance:
             self.expert_biases = nn.Parameter(torch.zeros(self.num_experts))
             
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         c_batch_size, c_context_len, c_dim = x.shape
         x_flat = x.view(-1, c_dim)          #c_batch_size * c_context_len, c_dim
 
@@ -302,6 +238,17 @@ class FFNwMoE(nn.Module): # MoE Layer/DeepSeek MoE Layer
         router_probs = F.softmax(router_out, dim=-1) 
 
         _, topk_indices = router_out.topk(self.moe_routed_experts, dim=-1)
+
+        aux_loss, topk_probs = self._compute_aux_loss(router_out, router_probs, topk_indices)
+
+        output = self._compute_expert_outputs(x_flat, topk_indices, topk_probs, router_probs)
+
+        return output.view(c_batch_size, c_context_len, c_dim), aux_loss
+
+    def _compute_aux_loss(self, router_out, router_probs, topk_indices):
+        """
+        Computes the auxiliary loss based on whether loss-free balancing is used or not.
+        """
         if not self.use_lossfreebalance:
             topk_probs, _ = router_probs.topk(self.moe_routed_experts, dim=-1)
             expert_mask = F.one_hot(topk_indices[:, 0], self.num_experts).float()
@@ -315,22 +262,16 @@ class FFNwMoE(nn.Module): # MoE Layer/DeepSeek MoE Layer
             topk_probs = router_probs.gather(-1, topk_indices)
             topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
 
-            # In the case of AUXILIARY-LOSS-FREE LOAD BALANCING we pass router_probs, topk_indices as aux_loss for further calculations 
+            # In the case of Auxiliary-loss-free load balancing we pass router_probs, topk_indices as aux_loss for further calculations 
             aux_loss = (router_probs, topk_indices)
+        return aux_loss, topk_probs
 
-        # topk_probs, topk_indices = router_probs.topk(self.moe_routed_experts, dim=-1)
+    def _compute_expert_outputs(self, x_flat, topk_indices, topk_probs, router_probs):
+        """
+        Compute the output of the experts and shared experts if needed
+        """
         output = torch.zeros_like(x_flat)
 
-        # expert_mask = torch.zeros_like(router_probs).scatter(-1, topk_indices, 1.0)
-        # density = expert_mask.mean(dim=0)
-        # router_prob_mean = router_probs.mean(dim=0)
-
-        # cv_expert = density.std() / (density.mean() + self.moe_eps)
-        # cv_router = router_prob_mean.std() / (router_prob_mean.mean() + self.moe_eps)
-        
-        # aux_loss = (cv_expert**2 + cv_router**2) * self.moe_aux_loss_coef
-
-        
         for i in range(self.moe_routed_experts):
             expert_index = topk_indices[:, i]
             expert_probs = topk_probs[:, i]
@@ -346,23 +287,25 @@ class FFNwMoE(nn.Module): # MoE Layer/DeepSeek MoE Layer
                 expert_output = w2(F.silu(w1(x_for_expert)) * w3(x_for_expert))
                 output[idx] += expert_output * expert_probs[idx].unsqueeze(-1)
 
-        # shared exprets(for DeepSeekMoE)
+        # shared experts(for DeepSeekMoE)
         for shared_expert_id in range(self.moe_shared_experts):
             w1, w2, w3 = self.shared_experts[shared_expert_id]
             expert_output = w2(F.silu(w1(x_flat)) * w3(x_flat))
             output = output + expert_output
-
-
-        return output.view(c_batch_size, c_context_len, c_dim), aux_loss
-
+        
+        return output
 
 
 class Block(nn.Module):
-    def __init__(self, config, device=device):
+    def __init__(self, config):
         super().__init__()
 
-        self.attention = GroupedQueryAttention(config, device=device)
-        self.ffn = FFNwMoE(config)
+        self.attention = GroupedQueryAttention(config)
+        if config.use_moe:
+            self.ffn = FFNwMoE(config)
+        else:
+            self.ffn = FeedForward(config)
+
 
         self.norm_attention = RMSNorm(config)
         self.norm_ffn = RMSNorm(config)
@@ -382,7 +325,7 @@ class Block(nn.Module):
     
 
 class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubMixin for save weights as safetensors
-    def __init__(self, config):
+    def __init__(self, config: ModelConfig):
         super().__init__()
 
         self.vocab_size = config.vocab_size
@@ -390,8 +333,9 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
         self.num_heads = config.num_heads
         self.num_layers = config.num_layers
         self.context_len = config.context_len
+        self.use_moe = config.use_moe
 
-        self.use_lossfreebalance = config.use_lossfreebalance
+        self.use_lossfreebalance = config.use_lossfreebalance and self.use_moe
 
         self.tokens_embedding = nn.Embedding(self.vocab_size, self.num_dims)
 
@@ -404,37 +348,21 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
 
         self.tokens_embedding.weight = self.ll_head.weight
 
-        self.freqs_complex = precompute_theta_pos_frequencies(self.num_dims // self.num_heads, self.context_len * 2, device=device)
+        self.freqs_complex = precompute_theta_pos_frequencies(self.num_dims // self.num_heads, self.context_len * 2, device=config.device)
 
-    # I have taken this function [configure_optimizers] from Karpathy's nanoGPT
-    # https://github.com/karpathy/nanoGPT
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
-        # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
-        ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        # Create AdamW optimizer and use the fused version if it is available
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"using fused AdamW: {use_fused}")
+        # Calculation of hidden_dim for FFN/FFNwMoE
+        multiple_of = 4
+        ffn_dim_multiplier = config.ffn_dim_multiplier
+        hidden_dim = 4 * config.num_dims
+        hidden_dim = int(2 * config.num_dims / 3)
 
-        return optimizer
+        if ffn_dim_multiplier is not None:
+            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
 
-    def forward(self, x, targets=None, start_pos=0):
+        config.ffn_hidden_dims = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+
+
+    def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None, start_pos: int = 0):
         _, seq_len = x.shape
         
         x = self.tokens_embedding(x)
@@ -444,7 +372,7 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
 
         for block in self.blocks:
             x, aux_loss = block(x, freqs_complex=freqs_complex, start_pos=start_pos)
-            if not self.use_lossfreebalance:
+            if self.use_moe and not self.use_lossfreebalance:
                 total_aux_loss += aux_loss
 
         x = self.norm(x)
@@ -453,31 +381,41 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
         
         if targets is None:
             loss = None
-            tt_loss = None
+            ce_loss = None
         else:
             c_batch_size, c_context_len, c_dim = logits.shape
             logits = logits.view(c_batch_size*c_context_len, c_dim)
             targets = targets.view(c_batch_size*c_context_len)
-            tt_loss = F.cross_entropy(logits, targets)
-            if not self.use_lossfreebalance: loss = tt_loss + total_aux_loss    # in this case, tt_loss its loss w/o aux_loss
-            else: 
-                                                                                # if we want to use AUXILIARY-LOSS-FREE LOAD BALANCING we pass router_probs, topk_indices as tt_loss
-                loss = tt_loss
-                tt_loss = aux_loss
+            ce_loss = F.cross_entropy(logits, targets)
+            
+            if self.use_moe and not self.use_lossfreebalance: loss = ce_loss + total_aux_loss    # in this case, ce_loss its loss w/o aux_loss
+            else: # if we want to use Auxiliary-loss-free load balancing we pass router_probs, topk_indices as ce_loss
+                # Also, work when moe is not used
+                loss = ce_loss
+                ce_loss = aux_loss
 
-        return logits, loss, tt_loss
+        return logits, loss, ce_loss
 
     @torch.no_grad()
-    def generate(self, x, max_tokens, use_cache=False):
+    def generate(self, x: torch.Tensor, max_tokens: int, temperature: float = 1.0, top_k: int = 50, 
+                 use_cache: bool = False):
+        """
+        Generate text from x up to max_tokens
+        """
         for c_tkn_pos in range(max_tokens):
             if use_cache:
                 if c_tkn_pos == 0:
-                    logits, _, tt_loss = self.forward(x, start_pos=c_tkn_pos)
+                    logits, _, ce_loss = self.forward(x, start_pos=c_tkn_pos)
                 else:
-                    logits, _, tt_loss = self.forward(x[:, -1], start_pos=c_tkn_pos)
+                    logits, _, ce_loss = self.forward(x[:, -1], start_pos=c_tkn_pos)
             else:
-                logits, _, tt_loss = self.forward(x)
-            logits = logits[:, -1, :]
+                logits, _, ce_loss = self.forward(x)
+
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                tkl, idx = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < tkl[:, [-1]]] = -float('Inf')
+
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             x = torch.cat((x, next_token), dim=1)
@@ -486,31 +424,40 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
 
 def main():
     config = ModelConfig(
+        device = 'cuda' if torch.cuda.is_available() else 'cpu',
         vocab_size = 50304,
 
         num_dims = 1024,
         num_heads = 16,
         num_kv_heads = 4,
         num_layers = 16,
+        ffn_hidden_dims = 1024 * 4,
 
         rmsnorm_eps = 1e-6,
         rope_theta = 1e5,
 
-        batch_size = 2**19,
-        mini_batches = 2,
-        time_stamps = 512,
         context_len = 1024,
         
         use_cache = False,
         use_flash = False,
+        use_moe = False,
 
         moe_num_experts = 6,
-        moe_routed_experts = 1,         #top_k
+        moe_routed_experts = 1,
         moe_eps = 1e-6,
         moe_aux_loss_coef = 0.01,
-        moe_shared_experts = 0,         #0 for default MoE. >0 for DeepSeekMoE
-        use_lossfreebalance = True
+        moe_shared_experts = 0,
+        use_lossfreebalance = False,
+
     )
+
+    
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    SEED = 1337
+
+    torch.manual_seed(SEED)
+    if device == 'cuda':
+        torch.cuda.manual_seed(SEED)
 
     model = Transformer(config)
     model = model.to(device)

@@ -57,3 +57,5 @@ This project was made possible with the inspiration and knowledge provided by th
 
 - **[MobileLLM](https://arxiv.org/pdf/2402.14905)**
 
+https://arxiv.org/pdf/2412.19437
+https://github.com/meta-llama/llama
