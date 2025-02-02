@@ -337,6 +337,17 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
 
         self.use_lossfreebalance = config.use_lossfreebalance and self.use_moe
 
+        # Calculation of hidden_dim for FFN/FFNwMoE
+        multiple_of = 4
+        ffn_dim_multiplier = config.ffn_dim_multiplier
+        hidden_dim = 4 * config.num_dims
+        hidden_dim = int(2 * config.num_dims / 3)
+
+        if ffn_dim_multiplier is not None:
+            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+
+        config.ffn_hidden_dims = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+
         self.tokens_embedding = nn.Embedding(self.vocab_size, self.num_dims)
 
         self.blocks = nn.ModuleList()
@@ -350,16 +361,7 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
 
         self.freqs_complex = precompute_theta_pos_frequencies(self.num_dims // self.num_heads, self.context_len * 2, device=config.device)
 
-        # Calculation of hidden_dim for FFN/FFNwMoE
-        multiple_of = 4
-        ffn_dim_multiplier = config.ffn_dim_multiplier
-        hidden_dim = 4 * config.num_dims
-        hidden_dim = int(2 * config.num_dims / 3)
 
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-
-        config.ffn_hidden_dims = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
 
     def forward(self, x: torch.Tensor, targets: Optional[torch.Tensor] = None, start_pos: int = 0):
