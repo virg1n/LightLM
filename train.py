@@ -26,7 +26,6 @@ class TrainerConfig:
     clean_cuda_cache: bool = True  # Helps prevent OOM errors during eval on large models
     use_compile: bool = True
 
-
     seed: int = 1998
     max_seq_len: int = 1024
     batch_size: int = 1
@@ -36,7 +35,6 @@ class TrainerConfig:
     warmup_ratio: float = 0.01
     learning_rate: float = 1e-3
     betas: Tuple[float, float] = (0.90, 0.95)
-
 
     val_ratio: int = 0.005
     steps_for_eval: int = 20
@@ -74,7 +72,7 @@ class DataLoader():
         self.val_start_idx = self.train_len_dataset
         self.val_current_idx = self.val_start_idx
 
-    def get_batch(self, current_idx, start_idx, end_idx):
+    def get_batch(self, current_idx: int, start_idx: int, end_idx: int):
         new_idx = current_idx + self.config.batch_size
         
         x_l, y_l = zip(*[(self.dataset[idx]['input_ids'][:-1], self.dataset[idx]['input_ids'][1:])
@@ -90,12 +88,11 @@ class DataLoader():
     def next_batch(self, split):
         if split == "train":
             x, y, self.train_current_idx = self.get_batch(self.train_current_idx, self.train_start_idx, self.train_end_idx)
-        else: #validation
+        else: # validation
             x, y, self.val_current_idx = self.get_batch(self.val_current_idx, self.val_start_idx, self.len_dataset)
-
         return x, y
     
-    def reset(self, rank=0, world_size=1):
+    def reset(self, rank: int = 0, world_size: int = 1):
         self.current_epoch = 0
         self.seed = self.config.seed
         self.load_dataset(self.seed)
@@ -115,7 +112,7 @@ class DataLoader():
         self.current_epoch += 1
         self.load_dataset(self.seed + self.current_epoch)
 
-    def load_dataset(self, seed):
+    def load_dataset(self, seed: int):
         self.dataset = DatatroveFolderDataset(
             folder_path=self.config.tokenized_dataset_path,
             filename_pattern=os.path.join(self.config.tokenized_dataset_path, "**", "*.ds"),
@@ -135,14 +132,13 @@ class Trainer():
         self.config = config
         self.model = model
         self.num_epochs = config.num_epochs
+
         self.use_moe = config.use_moe
         self.use_lossfreebalance = config.use_lossfreebalance if self.use_moe else False
         self.clean_cuda_cache = config.clean_cuda_cache
-
         self.steps_for_eval = config.steps_for_eval
-
         self.weight_decay = config.weight_decay
-
+        
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if self.device == 'cuda':
             torch.cuda.manual_seed(config.seed)
@@ -183,7 +179,8 @@ class Trainer():
             print(f"Method of aux_loss: {'loss-free-balance' if config.use_lossfreebalance else 'default'}")
             print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.model.blocks[0].ffn.parameters()) * len(self.model.blocks) * (self.model.blocks[0].ffn.moe_routed_experts + self.model.blocks[0].ffn.moe_routed_experts) / self.model.blocks[0].ffn.num_experts))  / 1e6:.2f}M")
     
-    def step(self, data_loader, accumulation_steps, num_tokens, split="train"):
+    def step(self, data_loader, accumulation_steps: int,
+              num_tokens: int, split: str = "train"):
         """
         Performs single forward/backward pass with gradient accumulation.
             Returns: (total_loss, cross_entropy_loss, number_of_processed_tokens)
@@ -303,7 +300,7 @@ class Trainer():
                     val_loss_accum += loss.detach()
             return val_loss_accum
 
-    def save_checkpoints(self, path, name):
+    def save_checkpoints(self, path: str, name: str):
         os.makedirs(path, exist_ok=True)
         checkpoint_path = os.path.join(path, f"model.checkpoint.{name}.pt")
         # self.model.save_pretrained(".checkpoint_path", config=config)
