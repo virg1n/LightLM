@@ -174,34 +174,26 @@ class GroupedQueryAttention(nn.Module):
             output = F.scaled_dot_product_attention(queries, keys, v, is_causal=True, enable_gqa=True)
             
         else: # Calculate Grouped Query Attention manually
+            keys = repeat_kv(keys, self.num_rep)
+            values = repeat_kv(v, self.num_rep)
+    
+            queries = queries.transpose(1, 2)
+            keys = keys.transpose(1, 2)
+            values = values.transpose(1, 2)
+    
+            attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+    
             if self.use_cache and x.shape[1] == 1:
-                keys = repeat_kv(keys, self.num_rep)
-                values = repeat_kv(v, self.num_rep)
-
-                queries = queries.transpose(1, 2)
-                keys = keys.transpose(1, 2)
-                values = values.transpose(1, 2)
-                
-                attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
-                
                 total_length = keys.size(2)
                 # For autoregressive generation, the query (which is at the latest position) should only attend to keys at indices <= current token.
                 # Create a mask: allowed positions are indices < total_length (i.e. all in the cache) 
-                # but if you ever generate more tokens than the cache contains, adjust accordingly.
                 mask = torch.arange(total_length, device=attention.device).unsqueeze(0) <= (start_pos + x.shape[1] - 1)
                 mask = mask.unsqueeze(0).unsqueeze(0)  # shape: (1, 1, 1, total_length)
                 attention = attention.masked_fill(~mask, float("-inf"))
                 attention = F.softmax(attention, dim=-1)
                 output = torch.matmul(attention, values)
+
             else:
-                keys = repeat_kv(keys, self.num_rep)
-                values = repeat_kv(v, self.num_rep)
-        
-                queries = queries.transpose(1, 2)
-                keys = keys.transpose(1, 2)
-                values = values.transpose(1, 2)
-        
-                attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
         
                 attention = torch.tril(attention[:, :, :c_context_len, :c_context_len])
                 attention = attention.masked_fill(attention == 0, float("-inf"))
