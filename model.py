@@ -98,7 +98,7 @@ class RMSNorm(torch.nn.Module):
 class GroupedQueryAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-
+        self.config = config
         self.use_cache = config.use_cache
         self.use_flash = config.use_flash
 
@@ -113,21 +113,29 @@ class GroupedQueryAttention(nn.Module):
         self.wv = nn.Linear(config.num_dims, self.num_kv_heads * self.head_dim, bias=False)
         self.wo = nn.Linear(config.num_dims, config.num_dims, bias=False)
 
+        self.cache_k = None
+        self.cache_v = None
+
+
     def forward(self, x, freqs_complex, start_pos = 0):
         c_batch_size, c_context_len, c_dim = x.shape # c_context_len = 1
+
+        if self.use_cache and c_context_len == 1:
+            # Cache branch
+            q = self.wq(x[:, -1, :])
+            k = self.wk(x[:, -1, :])
+            v = self.wv(x[:, -1, :])
     
-        q = self.wq(x)
-        k = self.wk(x)
-        v = self.wv(x)
+            q = q.view(c_batch_size, -1, self.num_heads, self.head_dim)
+            k = k.view(c_batch_size, -1, self.num_kv_heads, self.head_dim)
+            v = v.view(c_batch_size, -1, self.num_kv_heads, self.head_dim)
 
-        q = q.view(c_batch_size, c_context_len, self.num_heads, self.head_dim)      # B, T, qh, hs
-        k = k.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim)   # B, T, kh, hs
-        v = v.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim)   # B, T, vh, hs
+            freqs_complex = freqs_complex[-1:]
 
-        queries = apply_rotary_pos(q, freqs_complex, device=x.device)
-        keys = apply_rotary_pos(k, freqs_complex, device=x.device)
-
-        if self.use_cache:
+    
+            queries = apply_rotary_pos(q, freqs_complex, device=x.device)
+            keys = apply_rotary_pos(k, freqs_complex, device=x.device)
+            
             # Initialize cache if not exist
             if self.cache_k is None:
                 self.cache_k = torch.zeros(
@@ -138,6 +146,7 @@ class GroupedQueryAttention(nn.Module):
                     (c_batch_size, self.config.context_len, self.num_kv_heads, self.head_dim),
                     device=x.device
                 )
+                
             # Update cache
             self.cache_k[:c_batch_size, start_pos:start_pos + c_context_len] = keys
             self.cache_v[:c_batch_size, start_pos:start_pos + c_context_len] = v
@@ -146,24 +155,59 @@ class GroupedQueryAttention(nn.Module):
             v = self.cache_v[:c_batch_size, :start_pos + c_context_len]
             
 
+        else:
+            # Non-cache branch (process the entire sequence normally)
+            q = self.wq(x)
+            k = self.wk(x)
+            v = self.wv(x)
+    
+            q = q.view(c_batch_size, c_context_len, self.num_heads, self.head_dim)      # B, T, qh, hs
+            k = k.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim)   # B, T, kh, hs
+            v = v.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim)   # B, T, vh, hs
+    
+            queries = apply_rotary_pos(q, freqs_complex, device=x.device)
+            keys = apply_rotary_pos(k, freqs_complex, device=x.device)
+
+
+        
         if self.use_flash:
             output = F.scaled_dot_product_attention(queries, keys, v, is_causal=True, enable_gqa=True)
             
         else: # Calculate Grouped Query Attention manually
-            keys = repeat_kv(keys, self.num_rep)
-            values = repeat_kv(v, self.num_rep)
-    
-            queries = queries.transpose(1, 2)
-            keys = keys.transpose(1, 2)
-            values = values.transpose(1, 2)
-    
-            attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
-    
-            attention = torch.tril(attention[:, :, :c_context_len, :c_context_len])
-            attention = attention.masked_fill(attention == 0, float("-inf"))
-    
-            attention = F.softmax(attention, dim=-1).type_as(queries)
-            output = torch.matmul(attention, values)
+            if self.use_cache and x.shape[1] == 1:
+                keys = repeat_kv(keys, self.num_rep)
+                values = repeat_kv(v, self.num_rep)
+
+                queries = queries.transpose(1, 2)
+                keys = keys.transpose(1, 2)
+                values = values.transpose(1, 2)
+                
+                attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+                
+                total_length = keys.size(2)
+                # For autoregressive generation, the query (which is at the latest position) should only attend to keys at indices <= current token.
+                # Create a mask: allowed positions are indices < total_length (i.e. all in the cache) 
+                # but if you ever generate more tokens than the cache contains, adjust accordingly.
+                mask = torch.arange(total_length, device=attention.device).unsqueeze(0) <= (start_pos + x.shape[1] - 1)
+                mask = mask.unsqueeze(0).unsqueeze(0)  # shape: (1, 1, 1, total_length)
+                attention = attention.masked_fill(~mask, float("-inf"))
+                attention = F.softmax(attention, dim=-1)
+                output = torch.matmul(attention, values)
+            else:
+                keys = repeat_kv(keys, self.num_rep)
+                values = repeat_kv(v, self.num_rep)
+        
+                queries = queries.transpose(1, 2)
+                keys = keys.transpose(1, 2)
+                values = values.transpose(1, 2)
+        
+                attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
+        
+                attention = torch.tril(attention[:, :, :c_context_len, :c_context_len])
+                attention = attention.masked_fill(attention == 0, float("-inf"))
+        
+                attention = F.softmax(attention, dim=-1).type_as(queries)
+                output = torch.matmul(attention, values)
 
         output = output.transpose(2, 1).contiguous().view(c_batch_size, c_context_len, c_dim)
         return self.wo(output)
@@ -409,7 +453,7 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
                 if c_tkn_pos == 0:
                     logits, _, ce_loss = self.forward(x, start_pos=c_tkn_pos)
                 else:
-                    logits, _, ce_loss = self.forward(x[:, -1], start_pos=c_tkn_pos)
+                    logits, _, ce_loss = self.forward(x[:, -1:], start_pos=c_tkn_pos)
             else:
                 logits, _, ce_loss = self.forward(x)
 
