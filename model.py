@@ -116,6 +116,25 @@ class GroupedQueryAttention(nn.Module):
         self.cache_k = None
         self.cache_v = None
 
+    def update_kv_cache(self, batch_size, start_pos, context_len, keys, values, device):
+        # Initialize cache if not exist
+        if self.cache_k is None:
+            self.cache_k = torch.zeros(
+                (batch_size, self.config.context_len, self.num_kv_heads, self.head_dim),
+                device=device
+            )
+            self.cache_v = torch.zeros(
+                (batch_size, self.config.context_len, self.num_kv_heads, self.head_dim),
+                device=device
+            )
+            
+        # Update cache
+        self.cache_k[:batch_size, start_pos:start_pos + context_len] = keys
+        self.cache_v[:batch_size, start_pos:start_pos + context_len] = values
+
+        return (self.cache_k[:batch_size, :start_pos + context_len], 
+                self.cache_v[:batch_size, :start_pos + context_len])
+    
 
     def forward(self, x, freqs_complex, start_pos = 0):
         c_batch_size, c_context_len, c_dim = x.shape # c_context_len = 1
@@ -135,24 +154,8 @@ class GroupedQueryAttention(nn.Module):
     
             queries = apply_rotary_pos(q, freqs_complex, device=x.device)
             keys = apply_rotary_pos(k, freqs_complex, device=x.device)
-            
-            # Initialize cache if not exist
-            if self.cache_k is None:
-                self.cache_k = torch.zeros(
-                    (c_batch_size, self.config.context_len, self.num_kv_heads, self.head_dim),
-                    device=x.device
-                )
-                self.cache_v = torch.zeros(
-                    (c_batch_size, self.config.context_len, self.num_kv_heads, self.head_dim),
-                    device=x.device
-                )
-                
-            # Update cache
-            self.cache_k[:c_batch_size, start_pos:start_pos + c_context_len] = keys
-            self.cache_v[:c_batch_size, start_pos:start_pos + c_context_len] = v
 
-            keys = self.cache_k[:c_batch_size, :start_pos + c_context_len]
-            v = self.cache_v[:c_batch_size, :start_pos + c_context_len]
+            keys, v = self.update_kv_cache(batch_size=c_batch_size, start_pos=start_pos, context_len=c_context_len, keys=keys, values=v, device=x.device)
             
 
         else:
@@ -167,6 +170,8 @@ class GroupedQueryAttention(nn.Module):
     
             queries = apply_rotary_pos(q, freqs_complex, device=x.device)
             keys = apply_rotary_pos(k, freqs_complex, device=x.device)
+
+            if self.use_cache: _k, _v = self.update_kv_cache(batch_size=c_batch_size, start_pos=start_pos, context_len=c_context_len, keys=keys, values=v, device=x.device)
 
 
         
@@ -203,6 +208,9 @@ class GroupedQueryAttention(nn.Module):
 
         output = output.transpose(2, 1).contiguous().view(c_batch_size, c_context_len, c_dim)
         return self.wo(output)
+
+
+    
 
 
 class FeedForward(nn.Module):
