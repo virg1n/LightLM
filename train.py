@@ -35,6 +35,7 @@ class TrainerConfig:
     warmup_ratio: float = 0.01
     learning_rate: float = 1e-3
     betas: Tuple[float, float] = (0.90, 0.95)
+    update_rate: float = 1e-5  # update_rate of biases for loss-free balancing
 
     val_ratio: int = 0.005
     steps_for_eval: int = 20
@@ -138,7 +139,8 @@ class Trainer():
         self.clean_cuda_cache = config.clean_cuda_cache
         self.steps_for_eval = config.steps_for_eval
         self.weight_decay = config.weight_decay
-        
+        self.update_rate = config.update_rate if self.use_moe else 0
+
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         if self.device == 'cuda':
             torch.cuda.manual_seed(config.seed)
@@ -177,7 +179,7 @@ class Trainer():
             print(f"Number of experts: {self.model.blocks[0].ffn.num_experts}")
             print(f"Number of used experts during inference: {self.model.blocks[0].ffn.moe_routed_experts}")
             print(f"Method of aux_loss: {'loss-free-balance' if config.use_lossfreebalance else 'default'}")
-            print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.model.blocks[0].ffn.parameters()) * len(self.model.blocks) * (self.model.blocks[0].ffn.moe_routed_experts + self.model.blocks[0].ffn.moe_routed_experts) / self.model.blocks[0].ffn.num_experts))  / 1e6:.2f}M")
+            print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.model.blocks[0].ffn.parameters()) * len(self.model.blocks) * (1-(self.model.blocks[0].ffn.moe_routed_experts + self.model.blocks[0].ffn.moe_shared_experts) / (self.model.blocks[0].ffn.num_experts + self.model.blocks[0].ffn.moe_shared_experts)))) / 1e6:.2f}M")
     
     def step(self, data_loader, accumulation_steps: int,
               num_tokens: int, split: str = "train"):

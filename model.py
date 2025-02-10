@@ -172,8 +172,6 @@ class GroupedQueryAttention(nn.Module):
             keys = apply_rotary_pos(k, freqs_complex, device=x.device)
 
             if self.use_cache: _k, _v = self.update_kv_cache(batch_size=c_batch_size, start_pos=start_pos, context_len=c_context_len, keys=keys, values=v, device=x.device)
-
-
         
         if self.use_flash:
             output = F.scaled_dot_product_attention(queries, keys, v, is_causal=True, enable_gqa=True)
@@ -198,8 +196,7 @@ class GroupedQueryAttention(nn.Module):
                 attention = F.softmax(attention, dim=-1)
                 output = torch.matmul(attention, values)
 
-            else:
-        
+            else: # Do not use kv_cache
                 attention = torch.tril(attention[:, :, :c_context_len, :c_context_len])
                 attention = attention.masked_fill(attention == 0, float("-inf"))
         
