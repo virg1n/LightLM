@@ -35,7 +35,7 @@ class ModelConfig:
     use_moe: bool                       # enable mixture-of-experts
 
     moe_num_experts: int                # total number of experts
-    moe_routed_experts: int             # number of experts per token (top_k)
+    moe_active_experts: int             # number of experts per token (top_k)
     moe_eps: float = 1e-6               # epsilon for router stability
     moe_aux_loss_coef: float = 0.01     # coefficient for auxiliary loss
     moe_shared_experts: int = 0         # number of shared experts (DeepSeekMoE)
@@ -207,9 +207,6 @@ class GroupedQueryAttention(nn.Module):
         return self.wo(output)
 
 
-    
-
-
 class FeedForward(nn.Module):
     """
     Default Feed Forward Layer.
@@ -238,7 +235,7 @@ class FFNwMoE(nn.Module):
         super().__init__()
         self.hidden_dim = config.ffn_hidden_dims
 
-        self.moe_routed_experts = config.moe_routed_experts # top_k
+        self.moe_active_experts = config.moe_active_experts # top_k
         self.moe_aux_loss_coef = config.moe_aux_loss_coef
         self.moe_eps = config.moe_eps
         self.moe_shared_experts = config.moe_shared_experts
@@ -278,7 +275,7 @@ class FFNwMoE(nn.Module):
         router_out = self.router(x_flat)
         router_probs = F.softmax(router_out, dim=-1) 
 
-        _, topk_indices = router_out.topk(self.moe_routed_experts, dim=-1)
+        _, topk_indices = router_out.topk(self.moe_active_experts, dim=-1)
 
         aux_loss, topk_probs = self._compute_aux_loss(router_out, router_probs, topk_indices)
 
@@ -291,7 +288,7 @@ class FFNwMoE(nn.Module):
         Computes the auxiliary loss based on whether loss-free balancing is used or not.
         """
         if not self.use_lossfreebalance:
-            topk_probs, _ = router_probs.topk(self.moe_routed_experts, dim=-1)
+            topk_probs, _ = router_probs.topk(self.moe_active_experts, dim=-1)
             expert_mask = F.one_hot(topk_indices[:, 0], self.num_experts).float()
             density = expert_mask.mean(dim=0)
             router_prob_mean = router_probs.mean(dim=0)
@@ -313,7 +310,7 @@ class FFNwMoE(nn.Module):
         """
         output = torch.zeros_like(x_flat)
 
-        for i in range(self.moe_routed_experts):
+        for i in range(self.moe_active_experts):
             expert_index = topk_indices[:, i]
             expert_probs = topk_probs[:, i]
 
@@ -486,7 +483,7 @@ def main():
         use_moe = False,
 
         moe_num_experts = 6,
-        moe_routed_experts = 1,
+        moe_active_experts = 1,
         moe_eps = 1e-6,
         moe_aux_loss_coef = 0.01,
         moe_shared_experts = 0,
