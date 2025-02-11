@@ -3,15 +3,16 @@ from trainer import Trainer, TrainerConfig, DataLoader
 
 from transformers import AutoTokenizer
 import torch
+from torch.distributed import init_process_group, destroy_process_group
 
-torch.set_float32_matmul_precision('high')
+import os
+
 torch.cuda.empty_cache()
 
 tokenizer_id = "HuggingFaceTB/SmolLM-360M"
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
 tokenizer.pad_token = tokenizer.eos_token
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 train_config = TrainerConfig(
     vocab_size = tokenizer.vocab_size,
@@ -21,8 +22,8 @@ train_config = TrainerConfig(
     use_moe = False,
     use_lossfreebalance = False,
     clean_cuda_cache = True,
-    use_compile = True,
-    use_bfloat = "bfloat16",
+    use_compile = False,
+    use_dtype = "float16",
 
     seed = 1,
     max_seq_len = 1024,
@@ -75,6 +76,11 @@ config = ModelConfig(
 
 model = Transformer(config)
 
-data_loader = DataLoader(train_config)
+data_loader = DataLoader(train_config, int(os.environ['WORLD_SIZE']), int(os.environ['LOCAL_RANK']))
+
+init_process_group("nccl")
+
 trainer = Trainer(train_config, model, tokenizer)
 trainer.train(data_loader)
+
+destroy_process_group()

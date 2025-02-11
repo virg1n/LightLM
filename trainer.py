@@ -21,6 +21,7 @@ class TrainerConfig:
     use_lossfreebalance: bool       # use Auxiliary-loss-free load balancing strategy for mixture-of-experts from DeepSeek https://arxiv.org/pdf/2408.15664
     clean_cuda_cache: bool = True   # Helps prevent OOM errors during eval on large models
     use_compile: bool = True        # use torch.compile()
+    use_dtype: str = "bfloat16"
 
     seed: int = 1998                
     max_seq_len: int = 1024         # maximum context length for batch
@@ -134,12 +135,14 @@ class Trainer():
         self.use_moe = config.use_moe
         self.use_lossfreebalance = config.use_lossfreebalance if self.use_moe else False
         self.clean_cuda_cache = config.clean_cuda_cache
+        self.dtype = getattr(torch, self.config.use_dtype)
+
         self.steps_for_eval = config.steps_for_eval
         self.weight_decay = config.weight_decay
         self.update_rate = config.update_rate if self.use_moe else 0
 
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if self.device == 'cuda':
+        self.device = torch.device(f"cuda:0") if torch.cuda.is_available() else 'cpu'
+        if self.device.type == 'cuda':
             torch.cuda.manual_seed(config.seed)
             n_gpus = torch.cuda.device_count()
 
@@ -148,35 +151,40 @@ class Trainer():
             self.model = torch.compile(self.model)
             
         # DDP
-        if n_gpus > 1 and config.use_ddp:
+        if n_gpus > 1 and config.use_ddp:   
             self.ddp = True
             init_process_group(backend="nccl")
             self.ddp_rank = int(os.environ['RANK'])
             self.ddp_local_rank = int(os.environ['LOCAL_RANK'])
             self.ddp_world_size = int(os.environ['WORLD_SIZE'])
-            self.device = f'cuda:{self.ddp_local_rank}'
+            self.device = torch.device(f"cuda:{self.local_rank}")
             torch.cuda.set_device(self.device)
             self.master_process = self.ddp_rank == 0
+
+            self.model.to(self.device)
             
             self.model = DDP(self.model, device_ids=[self.ddp_local_rank])
-            self.raw_m = self.model.module
+            self.raw_m = model
         else:
             self.ddp = False
             self.ddp_rank = 0
             self.ddp_world_size = 1
             self.master_process = True
-            # self.model.to(self.device)
 
-        print("Device:", self.device)
-        print(f"Model's trainable params: {sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) / 1e6:.2f}M")
-        print(f"Tokens per step: {self.config.batch_size * self.config.max_seq_len * self.ddp_world_size * self.config.accumulation_steps}")
-        print(f"use {'torch.compile()'}: {use_compile}")
-        print(f"Use MoE: {'Yes ' if self.use_moe else 'No'}")
-        if self.use_moe:
-            print(f"Number of experts: {self.model.blocks[0].ffn.num_experts}")
-            print(f"Number of used experts during inference: {self.model.blocks[0].ffn.moe_routed_experts}")
-            print(f"Method of aux_loss: {'loss-free-balance' if config.use_lossfreebalance else 'default'}")
-            print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.model.blocks[0].ffn.parameters()) * len(self.model.blocks) * (1-(self.model.blocks[0].ffn.moe_routed_experts + self.model.blocks[0].ffn.moe_shared_experts) / (self.model.blocks[0].ffn.num_experts + self.model.blocks[0].ffn.moe_shared_experts)))) / 1e6:.2f}M")
+            if self.device != "cpu":
+                self.model.to(self.device)
+
+        if self.master_process:
+            print("Device:", self.device)
+            print(f"Model's trainable params: {sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) / 1e6:.2f}M")
+            print(f"Tokens per step: {self.config.batch_size * self.config.max_seq_len * self.ddp_world_size * self.config.accumulation_steps}")
+            print(f"use {'torch.compile()'}: {use_compile}")
+            print(f"Use MoE: {'Yes ' if self.use_moe else 'No'}")
+            if self.use_moe:
+                print(f"Number of experts: {self.model.blocks[0].ffn.num_experts}")
+                print(f"Number of used experts during inference: {self.model.blocks[0].ffn.moe_routed_experts}")
+                print(f"Method of aux_loss: {'loss-free-balance' if config.use_lossfreebalance else 'default'}")
+                print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.model.blocks[0].ffn.parameters()) * len(self.model.blocks) * (1-(self.model.blocks[0].ffn.moe_routed_experts + self.model.blocks[0].ffn.moe_shared_experts) / (self.model.blocks[0].ffn.num_experts + self.model.blocks[0].ffn.moe_shared_experts)))) / 1e6:.2f}M")
     
     def step(self, data_loader, accumulation_steps: int,
               num_tokens: int, split: str = "train"):
@@ -187,8 +195,10 @@ class Trainer():
         x, y = data_loader.next_batch(split=split)
         x, y = x.to(self.device), y.to(self.device)
         num_tokens += torch.numel(x)
-        with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
+
+        with torch.autocast(device_type=self.device.type, dtype=self.dtype):
             _, loss, ce_loss = self.model(x, y)
+
         loss /= accumulation_steps
 
         loss.backward()
@@ -290,13 +300,12 @@ class Trainer():
         with torch.no_grad():
             val_loss_accum = 0.0
             for _ in range(self.steps_for_eval):
-                with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
-                    x, y = data_loader.next_batch(split="val")
-                    x, y = x.to(self.device), y.to(self.device)
-                    with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
-                        _, loss, ce_loss = self.model(x, y)
-                    loss /= self.steps_for_eval
-                    val_loss_accum += loss.detach()
+                x, y = data_loader.next_batch(split="val")
+                x, y = x.to(self.device), y.to(self.device)
+                with torch.autocast(device_type=self.device.type, dtype=self.dtype):
+                    _, loss, ce_loss = self.model(x, y)
+                loss /= self.steps_for_eval
+                val_loss_accum += loss.detach()
             return val_loss_accum
 
     def save_checkpoints(self, path: str, name: str):

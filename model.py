@@ -20,7 +20,6 @@ import torch.distributed as dist
 
 @dataclass
 class ModelConfig:
-    device: str
     vocab_size: int
 
     num_dims: int                       # number of dimensions
@@ -397,7 +396,7 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
 
         self.tokens_embedding.weight = self.ll_head.weight
 
-        self.freqs_complex = precompute_theta_pos_frequencies(self.num_dims // self.num_heads, self.context_len * 2, device=config.device)
+        self.freqs_complex = None # precompute_theta_pos_frequencies(self.num_dims // self.num_heads, self.context_len * 2, device=config.device)
 
 
 
@@ -406,6 +405,8 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
         _, seq_len = x.shape
         
         x = self.tokens_embedding(x)
+        if self.freqs_complex == None:
+            self.freqs_complex = precompute_theta_pos_frequencies(self.num_dims // self.num_heads, self.context_len * 2, device=x.device)
         freqs_complex = self.freqs_complex[start_pos:start_pos + seq_len]
         
         total_aux_loss = 0
