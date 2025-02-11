@@ -53,6 +53,7 @@ class DataLoader():
         self.current_epoch = 0
         self.seed = config.seed
         self.token_size = 2 if config.vocab_size < 65535 else 4
+        self.rank = rank
 
         self.load_dataset(self.seed)
         self.len_dataset = len(self.dataset)
@@ -119,7 +120,7 @@ class DataLoader():
             token_size=self.token_size,
             recursive=True,
             shuffle=True,
-            seed=seed
+            seed=seed + self.rank
         )
 
     def num_train_steps(self):
@@ -157,7 +158,7 @@ class Trainer():
             self.ddp_rank = int(os.environ['RANK'])
             self.ddp_local_rank = int(os.environ['LOCAL_RANK'])
             self.ddp_world_size = int(os.environ['WORLD_SIZE'])
-            self.device = torch.device(f"cuda:{self.local_rank}")
+            self.device = torch.device(f"cuda:{self.ddp_local_rank}")
             torch.cuda.set_device(self.device)
             self.master_process = self.ddp_rank == 0
 

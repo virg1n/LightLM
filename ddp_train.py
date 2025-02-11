@@ -73,12 +73,13 @@ config = ModelConfig(
         use_lossfreebalance = False,
     )
 
+init_process_group("nccl")
 
 model = Transformer(config)
 
-data_loader = DataLoader(train_config, int(os.environ['WORLD_SIZE']), int(os.environ['LOCAL_RANK']))
+data_loader = DataLoader(train_config, int(os.environ['RANK']), 
+                         int(os.environ['WORLD_SIZE']))
 
-init_process_group("nccl")
 
 trainer = Trainer(train_config, model, tokenizer)
 trainer.train(data_loader)
