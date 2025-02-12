@@ -58,7 +58,7 @@ config = ModelConfig(
         rmsnorm_eps = 1e-6,
         rope_theta = 1e5,
     
-        context_len = 2048,
+        context_len = 1024,
         
         use_cache = False,
         use_flash = False,

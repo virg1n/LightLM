@@ -7,7 +7,6 @@ from typing import Tuple
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group
 
 from datatrove.utils.dataset import DatatroveFolderDataset
 
@@ -154,7 +153,6 @@ class Trainer():
         # DDP
         if n_gpus > 1 and config.use_ddp:   
             self.ddp = True
-            init_process_group(backend="nccl")
             self.ddp_rank = int(os.environ['RANK'])
             self.ddp_local_rank = int(os.environ['LOCAL_RANK'])
             self.ddp_world_size = int(os.environ['WORLD_SIZE'])

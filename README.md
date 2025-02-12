@@ -15,8 +15,7 @@ This repository explores the limits of small language models, pushing how smart 
 - **Loss-free Load balancing and DeepSeekMoE**
 
 ### Dataset
-The model will be trained on the **fineweb-edu** dataset with 1 epoch and Cosmopedia v2 (**40 billion tokens**). 
-Tokenizer: Huggingface’s tokenizers
+The model will be trained on the **fineweb-edu** dataset
 
 ### Performance
 Soon...

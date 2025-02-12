@@ -1,3 +1,7 @@
+# You can start ddp train with pytorch==2.20
+# pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0
+# Idk why, but last version doesnt work for ddp train
+
 from model import Transformer, ModelConfig
 from trainer import Trainer, TrainerConfig, DataLoader
 
