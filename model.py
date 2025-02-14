@@ -108,8 +108,11 @@ class GroupedQueryAttention(nn.Module):
         self.head_dim = config.num_dims // self.num_heads
 
         self.wq = nn.Linear(config.num_dims, config.num_dims, bias=False)
+        nn.init.normal_(self.wq.weight, mean=0, std=1/math.sqrt(config.num_dims))
         self.wk = nn.Linear(config.num_dims, self.num_kv_heads * self.head_dim, bias=False)
+        nn.init.normal_(self.wk.weight, mean=0, std=1/math.sqrt(config.num_dims))
         self.wv = nn.Linear(config.num_dims, self.num_kv_heads * self.head_dim, bias=False)
+        nn.init.normal_(self.wv.weight, mean=0, std=1/math.sqrt(config.num_dims))
         self.wo = nn.Linear(config.num_dims, config.num_dims, bias=False)
 
         self.cache_k = None

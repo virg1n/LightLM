@@ -146,7 +146,7 @@ class Trainer():
             torch.cuda.manual_seed(config.seed)
             n_gpus = torch.cuda.device_count()
 
-        use_compile = self.config.use_compile and self.device == "cuda" and torch.__version__.startswith("2")
+        use_compile = self.config.use_compile and self.device.type == "cuda" and torch.__version__.startswith("2")
         if use_compile:
             self.model = torch.compile(self.model)
             
@@ -214,7 +214,7 @@ class Trainer():
             lr=self.config.learning_rate,
             betas=self.config.betas,
             weight_decay=self.weight_decay,
-            fused=(self.device=="cuda")
+            fused=(self.device.type=="cuda")
         )
         
         warmup_steps = math.floor(self.config.warmup_ratio * num_steps_per_epoch * self.num_epochs)
@@ -270,11 +270,11 @@ class Trainer():
 
                 t1 = time.perf_counter()
 
-                tokens_per_sec = num_tokens / (t1 - t0)
+                tokens_per_sec = num_tokens / (t1 - t0) * self.ddp_world_size
 
                 # Logging 
                 if self.master_process:
-                    print(f"Epoch: {epoch} | Step: {step} |  loss: {accumulated_loss:.4f} | norm: {norm:.4f} |  tok/s: {tokens_per_sec}")
+                    print(f"Epoch: {epoch} | Step: {step} |  loss: {accumulated_loss:.4f} | norm: {norm:.4f} | lr: {scheduler.get_last_lr()[0]} | tok/s: {tokens_per_sec}")
                 
                 # Evaluation 
                 if self.master_process and ((step>0 and step % self.config.eval_interval == 0) or step == last_step):
@@ -282,7 +282,7 @@ class Trainer():
                     val_loss = self.eval(data_loader)
 
                     with open(self.config.eval_log_file, "a") as f:
-                        f.write(f"Step: {step * (epoch+1)}, val_loss: {val_loss:.4f}, norm: {norm:.4f}, time: {t1 - t0:.2f}ms, tok/s: {tokens_per_sec:.1f} \n")
+                        f.write(f"Step: {step * (epoch+1)}, val_loss: {val_loss:.4f}, norm: {norm:.4f}, lr: {scheduler.get_last_lr()[0]}, time: {t1 - t0:.2f}s, tok/s: {tokens_per_sec:.1f} \n")
 
                     self.model.train()
                     if self.clean_cuda_cache:
@@ -290,8 +290,8 @@ class Trainer():
 
                 # Save Chekpoints
                 if self.master_process and ((step % self.config.checkpoints_frequency == 0 and step > 0) or step == last_step):
-                    self.save_checkpoints(self.config.path_to_checkpoints, name=str((epoch+1) * step))
-
+                    self.save_checkpoints(optimizer, self.config.path_to_checkpoints, name=str((epoch+1) * step))
+    
     def eval(self, data_loader):
         """
         Evaluates model on validation split using running average of first [steps_for_eval] batches
@@ -307,9 +307,13 @@ class Trainer():
                 val_loss_accum += loss.detach()
             return val_loss_accum
 
-    def save_checkpoints(self, path: str, name: str):
+    def save_checkpoints(self, optimizer, path: str, name: str):
         os.makedirs(path, exist_ok=True)
         checkpoint_path = os.path.join(path, f"model.checkpoint.{name}.pt")
         # self.model.save_pretrained(".checkpoint_path", config=config)
-        torch.save(self.model.state_dict(), checkpoint_path)
+        checkpoint = {
+                    'model': self.model.state_dict(),
+                    'optimizer':optimizer.state_dict(),
+                }
+        torch.save(checkpoint, checkpoint_path)
         print("Checkpoints saved")
