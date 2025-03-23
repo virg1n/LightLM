@@ -63,27 +63,23 @@ def repeat_kv(vct: torch.Tensor, n_times: int):
 class Rotary(nn.Module):
     def __init__(self, config):
         super(Rotary, self).__init__()
-
         inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, config.num_dims // config.num_heads, 2).float() / (config.num_dims // config.num_heads)))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
-        self.seq_len_saved = None
-        self.cos_saved = None
-        self.sin_saved = None
+        self.seq_len_cached = None
+        self.cos_cached = None
+        self.sin_cached = None
 
     def forward(self, x, seq_dim=1):
         seq_len = x.size(seq_dim)
-        # Only recompute the cosine and sine matrices if the sequence length has changed.
-        if seq_len != self.seq_len_saved:
-            self.seq_len_saved = seq_len
-            pos = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
-            # Compute the outer product between positions and inverse frequencies.
-            freqs = torch.einsum("i,j->ij", pos, self.inv_freq) # (seq_len, inv_freq.shape[0])
-            # Duplicate the freqs along the last dimension to create pairs.
+        if seq_len != self.seq_len_cached:
+            self.seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+            freqs = torch.einsum("i,j->ij", t, self.inv_freq)
             emb = torch.cat((freqs, freqs), dim=-1)
-            self.cos_saved = emb.cos()
-            self.sin_saved = emb.sin()
+            self.cos_cached = emb.cos()
+            self.sin_cached = emb.sin()
 
-        return self.cos_saved, self.sin_saved
+        return self.cos_cached, self.sin_cached
 
 
 class RMSNorm(torch.nn.Module):
@@ -124,17 +120,15 @@ class GroupedQueryAttention(nn.Module):
         self.cache_k = None
         self.cache_v = None
 
-
-    def rotate_half(self, x):
+    @staticmethod
+    def _rotate_half(x):
         half = x.shape[-1] // 2
-        first_half, second_half  = x[..., :half], x[..., half:]
-        return torch.cat([-second_half, first_half], dim=-1)
+        x1, x2 = x[..., :half], x[..., half:]
+        return torch.cat([-x2, x1], dim=-1)
 
 
-    def apply_rotary_pos(self, q, k, cos, sin):
-        q_rot = q * cos + self.rotate_half(q) * sin
-        k_rot = k * cos + self.rotate_half(k) * sin
-        return q_rot, k_rot
+    def _apply_rotary_pos_emb(self, q, k, cos, sin):
+        return q * cos + self._rotate_half(q) * sin, k * cos + self._rotate_half(k) * sin
 
     def update_kv_cache(self, batch_size, start_pos, context_len, keys, values, device):
         # Initialize cache if not exist
@@ -169,24 +163,27 @@ class GroupedQueryAttention(nn.Module):
             k = k.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim).transpose(1, 2)   # B, T, kh, hs
             v = v.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim).transpose(1, 2)   # B, T, vh, hs
 
+            queries, keys = self._apply_rotary_pos_emb(q, k, cos, sin)
+            
             # freqs_complex = freqs_complex[-1:]
+    
             # queries = apply_rotary_pos(q, freqs_complex, device=x.device)
             # keys = apply_rotary_pos(k, freqs_complex, device=x.device)
 
             keys, v = self.update_kv_cache(batch_size=c_batch_size, start_pos=start_pos, context_len=c_context_len, keys=keys, values=v, device=x.device)
-            queries, keys = self.apply_rotary_pos(q, k, cos, sin)
             
+
         else:
             # Non-cache branch (process the entire sequence normally)
             q = self.wq(x)
             k = self.wk(x)
             v = self.wv(x)
     
-            q = q.view(c_batch_size, c_context_len, self.num_heads, self.head_dim).transpose(1, 2)      # B, qh, T, hs
-            k = k.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim).transpose(1, 2)   # B, kh, T, hs
-            v = v.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim).transpose(1, 2)   # B, vh, T, hs
+            q = q.view(c_batch_size, c_context_len, self.num_heads, self.head_dim).transpose(1, 2)      # B, T, qh, hs
+            k = k.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim).transpose(1, 2)   # B, T, kh, hs
+            v = v.view(c_batch_size, c_context_len, self.num_kv_heads, self.head_dim).transpose(1, 2)   # B, T, vh, hs
 
-            queries, keys = self.apply_rotary_pos(q, k, cos, sin)
+            queries, keys = self._apply_rotary_pos_emb(q, k, cos, sin)
     
             # queries = apply_rotary_pos(q, freqs_complex, device=x.device)
             # keys = apply_rotary_pos(k, freqs_complex, device=x.device)
@@ -197,8 +194,14 @@ class GroupedQueryAttention(nn.Module):
             output = F.scaled_dot_product_attention(queries, keys, v, is_causal=True, enable_gqa=True)
             
         else: # Calculate Grouped Query Attention manually
-            keys = repeat_kv(keys, self.num_rep)
-            values = repeat_kv(v, self.num_rep)
+            keys = keys.repeat_interleave(self.num_rep, -3)
+            values = values.repeat_interleave(self.num_rep, -3)
+            # keys = repeat_kv(keys, self.num_rep)
+            # values = repeat_kv(v, self.num_rep)
+    
+            # queries = queries.transpose(1, 2)
+            # keys = keys.transpose(1, 2)
+            # values = values.transpose(1, 2)
     
             attention = torch.matmul(queries, keys.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
     
@@ -237,7 +240,7 @@ class FeedForward(nn.Module):
         self.w3 = nn.Linear(config.num_dims, self.hidden_dim, bias=False)
         self.act = nn.SiLU()
     def forward(self, x: torch.Tensor):
-        return self.w2(self.act(self.w1(x)) * self.w3(x)), None
+        return self.w2(self.act(self.w1(x)) * self.w3(x))
 
 
 class FFNwMoE(nn.Module): 
@@ -361,8 +364,8 @@ class Block(nn.Module):
             self.ffn = FeedForward(config)
 
 
-        self.norm_attention = torch.nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) # you also can use RMSNorm(config)
-        self.norm_ffn = torch.nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) # you also can use RMSNorm(config)
+        self.norm_attention = nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) #RMSNorm(config)
+        self.norm_ffn = nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps)# RMSNorm(config)
 
     def forward(self, x, cos, sin, start_pos):
         x = x + self.attention(
@@ -370,11 +373,13 @@ class Block(nn.Module):
             cos, sin, start_pos
             )
         
-        ffn_out, aux_loss = self.ffn(
+        # ffn_out, aux_loss = self.ffn(
+        #     self.norm_ffn(x)
+        #     )
+        x = x + self.ffn(
             self.norm_ffn(x)
             )
-        x = x + ffn_out
-        return x, aux_loss
+        return x
     
 
 class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubMixin for save weights as safetensors
@@ -392,26 +397,27 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
         self.rotary_emb = Rotary(config)
         
         # Calculation of hidden_dim for FFN/FFNwMoE
-        # multiple_of = 4
-        # ffn_dim_multiplier = config.ffn_dim_multiplier
+        multiple_of = 4
+        ffn_dim_multiplier = config.ffn_dim_multiplier
         hidden_dim = 4 * config.num_dims
-        # hidden_dim = int(2 * config.num_dims / 3)
+        hidden_dim = int(2 * config.num_dims / 3)
 
-        # if ffn_dim_multiplier is not None:
-        #     hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+        if ffn_dim_multiplier is not None:
+            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
 
-        # config.ffn_hidden_dims = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+        config.ffn_hidden_dims = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+
         self.tokens_embedding = nn.Embedding(self.vocab_size, self.num_dims)
 
         self.blocks = nn.ModuleList()
         for _ in range(self.num_layers):
             self.blocks.append(Block(config))
 
-        self.norm = torch.nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) # you also can use RMSNorm(config)
+        self.norm = nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) #RMSNorm(config)
         self.ll_head = nn.Linear(self.num_dims, self.vocab_size, bias=False)
         
 
-        self.tokens_embedding.weight = self.ll_head.weight
+        self.tokens_embedding.weight = self.ll_he ad.weight
         # torch.nn.init.normal_(self.ll_head.weight, mean=0.0, std=0.02)
         # torch.nn.init.normal_(self.tokens_embedding.weight, mean=0.0, std=0.02)
 
@@ -433,9 +439,9 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
         total_aux_loss = 0
 
         for block in self.blocks:
-            x, aux_loss = block(x, cos, sin, start_pos=start_pos)
-            if self.use_moe and not self.use_lossfreebalance:
-                total_aux_loss += aux_loss
+            x = block(x, cos, sin, start_pos=start_pos)
+            # if self.use_moe and not self.use_lossfreebalance:
+            #     total_aux_loss += aux_loss
         
         x = self.norm(x)
         logits = self.ll_head(x)
@@ -445,18 +451,19 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
             loss = None
             ce_loss = None
         else:
-            c_batch_size, c_context_len, c_dim = logits.shape
-            logits = logits.view(c_batch_size*c_context_len, c_dim)
-            targets = targets.view(c_batch_size*c_context_len)
-            ce_loss = F.cross_entropy(logits, targets)
+            # c_batch_size, c_context_len, c_dim = logits.shape
+            # logits = logits.view(c_batch_size*c_context_len, c_dim)
+            # targets = targets.view(c_batch_size*c_context_len)
+            # loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             
-            if self.use_moe and not self.use_lossfreebalance: loss = ce_loss + total_aux_loss    # in this case, ce_loss its loss w/o aux_loss
-            else: # if we want to use Auxiliary-loss-free load balancing we pass router_probs, topk_indices as ce_loss
-                # Also, work when moe is not used
-                loss = ce_loss
-                ce_loss = aux_loss
+            # if self.use_moe and not self.use_lossfreebalance: loss = ce_loss + total_aux_loss    # in this case, ce_loss its loss w/o aux_loss
+            # else: # if we want to use Auxiliary-loss-free load balancing we pass router_probs, topk_indices as ce_loss
+            #     # Also, work when moe is not used
+            #     loss = ce_loss
+            #     ce_loss = aux_loss
 
-        return logits, loss, ce_loss
+        return logits, loss, None
 
     @torch.no_grad()
     def generate(self, x: torch.Tensor, max_tokens: int, temperature: float = 1.0, top_k: int = 50, 
@@ -485,48 +492,47 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
     
 
 def main():
-    # config = ModelConfig(
-    #     device = 'cuda' if torch.cuda.is_available() else 'cpu',
-    #     vocab_size = 50304,
+    config = ModelConfig(
+        device = 'cuda' if torch.cuda.is_available() else 'cpu',
+        vocab_size = 50304,
 
-    #     num_dims = 1024,
-    #     num_heads = 16,
-    #     num_kv_heads = 4,
-    #     num_layers = 16,
-    #     ffn_hidden_dims = 1024 * 4,
+        num_dims = 1024,
+        num_heads = 16,
+        num_kv_heads = 4,
+        num_layers = 16,
+        ffn_hidden_dims = 1024 * 4,
 
-    #     rmsnorm_eps = 1e-6,
-    #     rope_theta = 1e5,
+        rmsnorm_eps = 1e-6,
+        rope_theta = 1e5,
 
-    #     context_len = 1024,
+        context_len = 1024,
         
-    #     use_cache = False,
-    #     use_flash = False,
-    #     use_moe = False,
+        use_cache = False,
+        use_flash = False,
+        use_moe = False,
 
-    #     moe_num_experts = 6,
-    #     moe_active_experts = 1,
-    #     moe_eps = 1e-6,
-    #     moe_aux_loss_coef = 0.01,
-    #     moe_shared_experts = 0,
-    #     use_lossfreebalance = False,
+        moe_num_experts = 6,
+        moe_active_experts = 1,
+        moe_eps = 1e-6,
+        moe_aux_loss_coef = 0.01,
+        moe_shared_experts = 0,
+        use_lossfreebalance = False,
 
-    # )
+    )
 
     
-    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # SEED = 1337
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    SEED = 1337
 
-    # torch.manual_seed(SEED)
-    # if device == 'cuda':
-    #     torch.cuda.manual_seed(SEED)
+    torch.manual_seed(SEED)
+    if device == 'cuda':
+        torch.cuda.manual_seed(SEED)
 
-    # model = Transformer(config)
-    # model = model.to(device)
-    # model = torch.compile(model)
+    model = Transformer(config)
+    model = model.to(device)
+    model = torch.compile(model)
 
-    # print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
-    pass
+    print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
 
 
 if __name__ == "__main__":
