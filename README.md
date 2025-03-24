@@ -18,8 +18,10 @@ This repository explores the limits of small language models, pushing how smart 
 The model was trained on the [Cosmopedia v2](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia) dataset (~28 billion tokens). 
 
 ### Performance
-```ARC-C Accuracy: 27.2% 
-WinoGrande Accuracy: 52.8%```
+```
+ARC-C Accuracy: 27.2% 
+WinoGrande Accuracy: 52.8%
+```
 
 
 Here is example of the output when prompted with: "Hello, I am a language model,":
@@ -35,13 +37,14 @@ You can download weights [here](https://huggingface.co/Virg1n/LightLM).
 
 This project was made possible with the inspiration and knowledge provided by the following sources:
 
-- **[GPT-3 Research Paper (OpenAI)](https://arxiv.org/abs/2005.14165)**  
-
 - **[NanoGPT by Andrej Karpathy](https://github.com/karpathy/nanoGPT)**  
-
-- **[fineweb-edu Dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)**  
 
 - **[MobileLLM](https://arxiv.org/pdf/2402.14905)**
 
-https://arxiv.org/pdf/2412.19437
-https://github.com/meta-llama/llama
+- **[DeepSeek-V3 Technical Report](https://arxiv.org/pdf/2412.19437)**  
+
+- **[Llama](https://github.com/meta-llama/llama)**  
+
+- **[Cosmopedia Dataset](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia)**  
+
+- **[fineweb-edu Dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)**  
