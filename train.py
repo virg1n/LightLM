@@ -1,3 +1,5 @@
+# python train.py
+
 from model import Transformer, ModelConfig
 from trainer import Trainer, TrainerConfig, DataLoader
 
@@ -89,12 +91,7 @@ if continue_train:
 
     model.load_state_dict(new_state_dict, strict=False)
 
-
 model.to(device)
-
-input_ids = tokenizer(["Gravity is"], return_tensors="pt")['input_ids'].to(device)
-idx = model.generate(input_ids, temperature=0.25, top_k=50, max_tokens=15)
-print(tokenizer.batch_decode(idx)[0])
 
 data_loader = DataLoader(train_config)
 trainer = Trainer(train_config, model, tokenizer)
