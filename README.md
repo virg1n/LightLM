@@ -18,8 +18,10 @@ This repository explores the limits of small language models, pushing how smart 
 The model was trained on the [Cosmopedia v2](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia) dataset (~28 billion tokens). 
 
 ### Performance
-```ARC-C Accuracy: 27.2% 
-WinoGrande Accuracy: 52.8%```
+```
+ARC-C Accuracy: 27.2% 
+WinoGrande Accuracy: 52.8%
+```
 
 
 Here is example of the output when prompted with: "Hello, I am a language model,":
